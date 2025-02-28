@@ -112,6 +112,21 @@ def create_volt_table(table_name, cursor):
     )
     """.format(table_name)
     create_table_if_not_exists(table_name, cursor, query)
+    
+def insert_accelerometers_entries(cursor, tsm_id, logger_name, number_of_segments):
+    ts_updated = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    voltage_max = 3.3
+    voltage_min = 3.3
+
+    for node_id in range(1, number_of_segments + 1):
+        for accel_number in [1, 2]:
+            in_use = 1 if accel_number == 1 else 0
+            insert_accel_query = """
+            INSERT INTO accelerometers (tsm_id, node_id, accel_number, ts_updated, voltage_max, voltage_min, in_use)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(insert_accel_query, (tsm_id, node_id, accel_number, ts_updated, voltage_max, voltage_min, in_use))
+    print(f"Entries added to accelerometers table for tsm_id: {tsm_id}, {logger_name}.")
 
 def create_rain_table(table_name, cursor):
     query = """
@@ -275,14 +290,37 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
             continue
         model_id = model_result[0]
 
-        insert_query = """
-        INSERT INTO commons_db.loggers (logger_name, site_id, date_activated, date_deactivated, latitude, longitude, model_id)
-        VALUES (%s, %s, %s, NULL, %s, %s, %s)
+        # insert_query = """
+        # INSERT INTO commons_db.loggers (logger_name, site_id, date_activated, date_deactivated, latitude, longitude, model_id)
+        # VALUES (%s, %s, %s, NULL, %s, %s, %s)
+        # """
+        # cursor.execute(insert_query, (logger_name, site_id, date_activated, latitude, longitude, model_id))               
+        # cursor.execute("SELECT logger_id FROM commons_db.loggers WHERE logger_name = %s", (logger_name,))
+        # logger_id = cursor.fetchone()[0]
+        
+        # Insert new logger
+        insert_logger_query = """
+        INSERT INTO commons_db.loggers (logger_name, site_id, date_activated, latitude, longitude, model_id) 
+        VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(insert_query, (logger_name, site_id, date_activated, latitude, longitude, model_id))        
-                
-        cursor.execute("SELECT logger_id FROM commons_db.loggers WHERE logger_name = %s", (logger_name,))
+        cursor.execute(insert_logger_query, (logger_name, site_id, date_activated, latitude, longitude, model_id))
+
+        # First, try to get the last inserted ID
+        cursor.execute("SELECT LAST_INSERT_ID()")
         logger_id = cursor.fetchone()[0]
+        # Fallback: If LAST_INSERT_ID() fails, fetch the latest logger_id based on logger_name
+        if not logger_id:
+            cursor.execute("""
+                SELECT logger_id FROM commons_db.loggers 
+                WHERE logger_name = %s 
+                ORDER BY date_activated DESC, logger_id DESC 
+                LIMIT 1
+            """, (logger_name,))
+            result = cursor.fetchone()
+            if result:
+                logger_id = result[0]
+  
+        
         if logger_type in ['2']:
             sim_num = input("Enter the SIM number: ")
             if len(sim_num) != 12:
@@ -307,11 +345,26 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
             """
             cursor.execute(insert_mobile_query, (new_mobile_id, logger_id, sim_num, date_activated, gsm_id))
         
+        # Update tsm_sensors table
+        segment_length = input("Enter the segment length (0.5, 0.75 or 1): ")
+        number_of_segments = input("Enter the total number of segments: ")
+        version = input("Enter the version number: ")
+
+        insert_tsm_query = """
+        INSERT INTO tsm_sensors (site_id, logger_id, tsm_name, date_activated, date_deactivated, segment_length, number_of_segments, version)
+        VALUES (%s, %s, %s, %s, NULL, %s, %s, %s)
+        """
+        cursor.execute(insert_tsm_query, (site_id, logger_id, logger_name, date_activated, segment_length, number_of_segments, version))
+        # Get the tsm_id of the newly inserted tsm_sensors entry
+        cursor.execute("SELECT LAST_INSERT_ID()")
+        tsm_id = cursor.fetchone()[0]
+        
         # Create tables based on sensor types
         if has_tilt:
             create_tilt_table(f"tilt_{logger_name}", cursor)
             create_temp_table(f"temp_{logger_name}", cursor)
             create_volt_table(f"volt_{logger_name}", cursor)
+            insert_accelerometers_entries(cursor, tsm_id, logger_name, int(number_of_segments))
         if has_rain:
             create_rain_table(f"rain_{logger_name}", cursor)
             insert_into_rainfall_gauges(cursor, logger_name, date_activated, latitude, longitude)          
@@ -326,8 +379,9 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
             create_gnss_table(f"gnss_{logger_name}", cursor)
         # break
         
+        
         connection.commit()
-        print(f"New logger entry created successfully for {logger_name}.")
+        print(f"New logger entry created successfully for {logger_name} and updated in tsm_sensors.")
         return None
 
 
