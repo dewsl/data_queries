@@ -211,7 +211,11 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
         site_ids = set()
         for match in matches:
             site_ids.add(match[1])     
+        if not site_ids:
+            print("Error: No matching site_id found for the logger name.")
+            return
         site_id = site_ids.pop()
+        print(f"Using site_id: {site_id}")
         
         date_activated = input("Enter the date activated (YYYY-MM-DD): ")
         try:
@@ -297,7 +301,8 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
         # cursor.execute(insert_query, (logger_name, site_id, date_activated, latitude, longitude, model_id))               
         # cursor.execute("SELECT logger_id FROM commons_db.loggers WHERE logger_name = %s", (logger_name,))
         # logger_id = cursor.fetchone()[0]
-        
+
+        print("Creating new logger entry...") 
         # Insert new logger
         insert_logger_query = """
         INSERT INTO commons_db.loggers (logger_name, site_id, date_activated, latitude, longitude, model_id) 
@@ -319,7 +324,6 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
             result = cursor.fetchone()
             if result:
                 logger_id = result[0]
-  
         
         if logger_type in ['2']:
             sim_num = input("Enter the SIM number: ")
@@ -350,6 +354,7 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
         number_of_segments = input("Enter the total number of segments: ")
         version = input("Enter the version number: ")
 
+        print("Creating new tsm_sensors entry...")
         insert_tsm_query = """
         INSERT INTO tsm_sensors (site_id, logger_id, tsm_name, date_activated, date_deactivated, segment_length, number_of_segments, version)
         VALUES (%s, %s, %s, %s, NULL, %s, %s, %s)
@@ -361,11 +366,13 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
         
         # Create tables based on sensor types
         if has_tilt:
+            print("Creating tilt related table...")
             create_tilt_table(f"tilt_{logger_name}", cursor)
             create_temp_table(f"temp_{logger_name}", cursor)
             create_volt_table(f"volt_{logger_name}", cursor)
             insert_accelerometers_entries(cursor, tsm_id, logger_name, int(number_of_segments))
         if has_rain:
+            print("Creating rain table...")
             create_rain_table(f"rain_{logger_name}", cursor)
             insert_into_rainfall_gauges(cursor, logger_name, date_activated, latitude, longitude)          
 
@@ -375,8 +382,9 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
         #     create_soms_table(f"soms_{logger_name}", cursor)
         # if has_stilt:
         #     create_stilt_table(f"stilt_{logger_name}", cursor)
-        if has_gnss:
-            create_gnss_table(f"gnss_{logger_name}", cursor)
+        # if has_gnss:
+            # print("Creating gnss table...")
+            # create_gnss_table(f"gnss_{logger_name}", cursor)
         # break
         
         
@@ -423,7 +431,7 @@ def update_logger_mobile_number(connection):
     print("2. Logger with no GSM before: router to ARQ mode")
     print("3. Remove logger GSM: ARQ mode to router or decommission")
     print("")
-    case = input("Enter the case number (1, 2, or 3). Enter x to exit: ")
+    case = int(input("Enter the case number (1, 2, or 3). Enter x to exit: "))
     print("")
 
     try:
