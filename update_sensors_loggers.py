@@ -15,10 +15,55 @@ import sys
 import os
 
 
+# def get_valid_logger_name(connection, cursor):
+#     while True:
+#         logger_name = input("Enter the logger name: ")
+
+#         query = """
+#         SELECT 1
+#         FROM commons_db.loggers
+#         WHERE logger_name = %s
+#         """
+#         cursor.execute(query, (logger_name,))
+#         result = cursor.fetchall()
+        
+#         if result:
+#             return logger_name
+        
+#         else:
+#             cursor.execute("SELECT logger_name, site_id FROM commons_db.loggers WHERE logger_name LIKE %s", (logger_name[:3] + '%',))
+#             matches = cursor.fetchall()
+
+#             if matches:
+#                 print(f"Error: Logger with name '{logger_name}' not found. However, we found loggers with similar names:")
+                
+#                 site_ids = set()
+#                 for match in matches:
+#                     print(f" - {match[0]}")
+#                     site_ids.add(match[1])
+                                
+#                 if len(site_ids) != 1:
+#                     print("Error: Multiple or no unique site_id found for similar logger names.")
+#                     exit()
+
+#                 # site_id = site_ids.pop()
+#                 create_entry = input("Do you want to create a new entry for this logger? (1 for Yes, 0 for No): ").strip()
+#                 if create_entry == '1':
+#                     print("ay wow bago")
+#                     print(" ")
+#                     create_new_logger_entry(connection, cursor, logger_name)
+#                 elif create_entry == '0':
+#                     print("No entry created. Exiting.")
+#                 return None    
+        
+#             else:
+#                 print(f"Error: Logger with name '{logger_name}' not found. Please try again.")
+
 def get_valid_logger_name(connection, cursor):
     while True:
         logger_name = input("Enter the logger name: ")
 
+        # Check if logger already exists
         query = """
         SELECT 1
         FROM commons_db.loggers
@@ -29,35 +74,47 @@ def get_valid_logger_name(connection, cursor):
         
         if result:
             return logger_name
-        
         else:
-            cursor.execute("SELECT logger_name, site_id FROM commons_db.loggers WHERE logger_name LIKE %s", (logger_name[:3] + '%',))
-            matches = cursor.fetchall()
+            # Check for loggers with similar site_id
+            cursor.execute("""
+                SELECT site_id FROM commons_db.sites 
+                WHERE site_code = %s
+            """, (logger_name[:3],))  # assuming site_code = first 3 letters
+            site = cursor.fetchone()
 
-            if matches:
-                print(f"Error: Logger with name '{logger_name}' not found. However, we found loggers with similar names:")
-                
-                site_ids = set()
-                for match in matches:
-                    print(f" - {match[0]}")
-                    site_ids.add(match[1])
-                                
-                if len(site_ids) != 1:
-                    print("Error: Multiple or no unique site_id found for similar logger names.")
-                    exit()
+            if site:
+                site_id = site[0]
 
-                # site_id = site_ids.pop()
-                create_entry = input("Do you want to create a new entry for this logger? (1 for Yes, 0 for No): ").strip()
-                if create_entry == '1':
-                    print("ay wow bago")
-                    print(" ")
-                    create_new_logger_entry(connection, cursor, logger_name)
-                elif create_entry == '0':
-                    print("No entry created. Exiting.")
-                return None    
-        
+                # Are there any loggers for this site?
+                cursor.execute("SELECT logger_name FROM commons_db.loggers WHERE site_id = %s", (site_id,))
+                loggers = cursor.fetchall()
+
+                if not loggers:
+                    # No loggers yet in this site → sanity check
+                    create_entry = input(
+                        f"No existing loggers found for site {site_id}. "
+                        f"Do you want to create a new logger '{logger_name}'? (1 for Yes, 0 for No): "
+                    ).strip()
+                    if create_entry == '1':
+                        create_new_logger_entry(connection, cursor, logger_name)
+                    else:
+                        print("No entry created. Exiting.")
+                    return None
+                else:
+                    # Some loggers exist, just not exact name
+                    print(f"Error: Logger with name '{logger_name}' not found. However, existing loggers for site {site_id} are:")
+                    for l in loggers:
+                        print(f" - {l[0]}")
+                    
+                    create_entry = input("Do you want to create a new entry with this logger name? (1 for Yes, 0 for No): ").strip()
+                    if create_entry == '1':
+                        create_new_logger_entry(connection, cursor, logger_name)
+                    else:
+                        print("No entry created. Exiting.")
+                    return None
             else:
-                print(f"Error: Logger with name '{logger_name}' not found. Please try again.")
+                print(f"Error: Logger with name '{logger_name}' not found and no matching site found. Please try again.")
+
 
 def create_table_if_not_exists(table_name, cursor, create_table_query):
     # try:
@@ -199,6 +256,23 @@ def create_gnss_table(table_name, cursor):
     )
     """.format(table_name)
     create_table_if_not_exists(table_name, cursor, query)
+    
+def insert_into_data_presence_rain(cursor, rain_id):
+    insert_query = """
+    INSERT INTO analysis_db.data_presence_rain_gauges (rain_id)
+    VALUES (%s)
+    """
+    cursor.execute(insert_query, (rain_id,))
+    print(f"Inserted rain_id {rain_id} into data_presence_rain_gauges.")
+
+def insert_into_data_presence_tsm(cursor, tsm_id):
+    insert_query = """
+    INSERT INTO analysis_db.data_presence_tsm (tsm_id)
+    VALUES (%s)
+    """
+    cursor.execute(insert_query, (tsm_id,))
+    print(f"Inserted tsm_id {tsm_id} into data_presence_tsm.")
+
 
 def validate_int(value_str, valid_values):
     return value_str.isdigit() and int(value_str) in valid_values
@@ -212,10 +286,17 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
         for match in matches:
             site_ids.add(match[1])     
         if not site_ids:
-            print("Error: No matching site_id found for the logger name.")
-            return
-        site_id = site_ids.pop()
-        print(f"Using site_id: {site_id}")
+            # fallback: check directly from commons_db.sites using site_code
+            cursor.execute("SELECT site_id FROM commons_db.sites WHERE site_code = %s", (logger_name[:3],))
+            site_result = cursor.fetchone()
+            if not site_result:
+                print("Error: No matching site_id found in sites for this logger.")
+                return
+            site_id = site_result[0]
+            print(f"No existing loggers yet. Using site_id: {site_id}")
+        else:
+            site_id = site_ids.pop()
+            print(f"Using site_id: {site_id}")
         
         date_activated = input("Enter the date activated (YYYY-MM-DD): ")
         try:
@@ -364,6 +445,9 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
         cursor.execute("SELECT LAST_INSERT_ID()")
         tsm_id = cursor.fetchone()[0]
         
+        # Insert into data_presence_tsm
+        insert_into_data_presence_tsm(cursor, tsm_id)
+        
         # Create tables based on sensor types
         if has_tilt:
             print("Creating tilt related table...")
@@ -375,6 +459,13 @@ def create_new_logger_entry(connection, cursor, logger_name, schema="analysis_db
             print("Creating rain table...")
             create_rain_table(f"rain_{logger_name}", cursor)
             insert_into_rainfall_gauges(cursor, logger_name, date_activated, latitude, longitude)          
+            
+            # Get the rain_id of the newly inserted rainfall_gauges entry
+            cursor.execute("SELECT LAST_INSERT_ID()")
+            rain_id = cursor.fetchone()[0]
+
+            # Insert into data_presence_rain_gauges
+            insert_into_data_presence_rain(cursor, rain_id)
 
         # if has_piezo:
         #     create_piezo_table(f"piezo_{logger_name}", cursor)
